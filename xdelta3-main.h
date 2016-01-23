@@ -1,6 +1,6 @@
 /* xdelta3 - delta compression tools and library
  * Copyright (C) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008,
- * 2009, 2010, 2011, 2012, 2013 Joshua P. MacDonald
+ * 2009, 2010, 2011, 2012, 2013, 2014, 2015 Joshua P. MacDonald
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -49,19 +49,6 @@
 
 /*********************************************************************/
 
-#ifndef XD3_POSIX
-#define XD3_POSIX 0
-#endif
-#ifndef XD3_STDIO
-#define XD3_STDIO 0
-#endif
-#ifndef XD3_WIN32
-#define XD3_WIN32 0
-#endif
-#ifndef NOT_MAIN
-#define NOT_MAIN 0
-#endif
-
 /* Combines xd3_strerror() and strerror() */
 const char* xd3_mainerror(int err_num);
 
@@ -81,12 +68,6 @@ xsnprintf_func (char *str, int n, const char *fmt, ...)
     }
   return ret;
 }
-
-/* If none are set, default to posix. */
-#if (XD3_POSIX + XD3_STDIO + XD3_WIN32) == 0
-#undef XD3_POSIX
-#define XD3_POSIX 1
-#endif
 
 /* Handle externally-compressed inputs. */
 #ifndef EXTERNAL_COMPRESSION
@@ -238,10 +219,9 @@ static int         option_verbose            = DEFAULT_VERBOSE;
 static int         option_quiet              = 0;
 static int         option_use_appheader      = 1;
 static uint8_t*    option_appheader          = NULL;
-static int         option_use_secondary      = 0;
+static int         option_use_secondary      = 1;
 static const char* option_secondary          = NULL;
 static int         option_use_checksum       = 1;
-static int         option_use_altcodetable   = 0;
 static const char* option_smatch_config      = NULL;
 static int         option_no_compress        = 0;
 static int         option_no_output          = 0; /* do not write output */
@@ -357,8 +337,8 @@ xprintf (const char *fmt, ...)
 static int
 main_version (void)
 {
-  /* $Format: "  XPR(NTR \"Xdelta version $Xdelta3Version$, Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013, Joshua MacDonald\\n\");" $ */
-  XPR(NTR "Xdelta version 3.0.8, Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013 Joshua MacDonald\n");
+  /* $Format: "  XPR(NTR \"Xdelta version $Xdelta3Version$, Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, Joshua MacDonald\\n\");" $ */
+  XPR(NTR "Xdelta version 3.0.11, Copyright (C) 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Joshua MacDonald\n");
   XPR(NTR "Xdelta comes with ABSOLUTELY NO WARRANTY.\n");
   XPR(NTR "This is free software, and you are welcome to redistribute it\n");
   XPR(NTR "under certain conditions; see \"COPYING\" for details.\n");
@@ -371,8 +351,6 @@ main_config (void)
   main_version ();
 
   XPR(NTR "EXTERNAL_COMPRESSION=%d\n", EXTERNAL_COMPRESSION);
-  XPR(NTR "GENERIC_ENCODE_TABLES=%d\n", GENERIC_ENCODE_TABLES);
-  XPR(NTR "GENERIC_ENCODE_TABLES_COMPUTE=%d\n", GENERIC_ENCODE_TABLES_COMPUTE);
   XPR(NTR "REGRESSION_TEST=%d\n", REGRESSION_TEST);
   XPR(NTR "SECONDARY_DJW=%d\n", SECONDARY_DJW);
   XPR(NTR "SECONDARY_FGK=%d\n", SECONDARY_FGK);
@@ -394,6 +372,8 @@ main_config (void)
   XPR(NTR "XD3_HARDMAXWINSIZE=%d\n", XD3_HARDMAXWINSIZE);
   XPR(NTR "sizeof(void*)=%d\n", (int)sizeof(void*));
   XPR(NTR "sizeof(int)=%d\n", (int)sizeof(int));
+  XPR(NTR "sizeof(long)=%d\n", (int)sizeof(long));
+  XPR(NTR "sizeof(long long)=%d\n", (int)sizeof(long long));
   XPR(NTR "sizeof(size_t)=%d\n", (int)sizeof(size_t));
   XPR(NTR "sizeof(uint32_t)=%d\n", (int)sizeof(uint32_t));
   XPR(NTR "sizeof(uint64_t)=%d\n", (int)sizeof(uint64_t));
@@ -411,9 +391,8 @@ reset_defaults(void)
   option_verbose = DEFAULT_VERBOSE;
   option_quiet = 0;
   option_appheader = NULL;
-  option_use_secondary = 0;
+  option_use_secondary = 1;
   option_secondary = NULL;
-  option_use_altcodetable = 0;
   option_smatch_config = NULL;
   option_no_compress = 0;
   option_no_output = 0;
@@ -877,6 +856,8 @@ main_file_open (main_file *xfile, const char* name, int mode)
       return XD3_INVALID;
     }
 
+  IF_DEBUG1(DP(RINT "[main] open source %s\n", name));
+
 #if XD3_STDIO
   xfile->file = fopen (name, XOPEN_STDIO);
 
@@ -982,7 +963,7 @@ xd3_posix_io (int fd, uint8_t *buf, size_t size,
 
   while (nproc < size)
     {
-      size_t tryread = min(size - nproc, 1U << 30);
+      size_t tryread = xd3_min(size - nproc, 1U << 30);
       ssize_t result = (*func) (fd, buf + nproc, tryread);
 
       if (result < 0)
@@ -1048,6 +1029,7 @@ main_file_read (main_file  *ifile,
 		const char *msg)
 {
   int ret = 0;
+  IF_DEBUG1(DP(RINT "[main] read %s up to %"Z"u\n", ifile->filename, size));
 
 #if XD3_STDIO
   size_t result;
@@ -1075,7 +1057,7 @@ main_file_read (main_file  *ifile,
     }
   else
     {
-      if (option_verbose > 4) { XPR(NT "read %s: %zu bytes\n",
+      if (option_verbose > 4) { XPR(NT "read %s: %"Z"u bytes\n",
 				    ifile->filename, (*nread)); }
       ifile->nread += (*nread);
     }
@@ -1088,6 +1070,8 @@ main_file_write (main_file *ofile, uint8_t *buf, usize_t size, const char *msg)
 {
   int ret = 0;
 
+  IF_DEBUG1(DP(RINT "[main] write %u\n bytes", size));
+  
 #if XD3_STDIO
   usize_t result;
 
@@ -1157,6 +1141,8 @@ main_write_output (xd3_stream* stream, main_file *ofile)
 {
   int ret;
 
+  IF_DEBUG1(DP(RINT "[main] write(%s) %u\n bytes", ofile->filename, stream->avail_out));
+
   if (option_no_output)
     {
       return 0;
@@ -1176,70 +1162,72 @@ static int
 main_set_secondary_flags (xd3_config *config)
 {
   int ret;
-  if (option_use_secondary)
+  if (!option_use_secondary)
     {
-      /* The default secondary compressor is DJW, if it's compiled. */
-      if (option_secondary == NULL)
+      return 0;
+    }
+  if (option_secondary == NULL)
+    {
+      /* Set a default secondary compressor if LZMA is built in, otherwise
+       * default to no secondary compressor. */
+      if (SECONDARY_LZMA)
 	{
-	  if (SECONDARY_DJW)
-	    {
-	      config->flags |= XD3_SEC_DJW;
-	    }
+	  config->flags |= XD3_SEC_LZMA;
 	}
-      else
+    }
+  else
+    {
+      if (strcmp (option_secondary, "lzma") == 0 && SECONDARY_LZMA)
 	{
-	  if (strcmp (option_secondary, "fgk") == 0 && SECONDARY_FGK)
-	    {
-	      config->flags |= XD3_SEC_FGK;
-	    }
-	  else if (strcmp (option_secondary, "lzma") == 0 && SECONDARY_LZMA)
-	    {
-	      config->flags |= XD3_SEC_LZMA;
-	    }
-	  else if (strncmp (option_secondary, "djw", 3) == 0 && SECONDARY_DJW)
-	    {
-	      usize_t level = XD3_DEFAULT_SECONDARY_LEVEL;
+	  config->flags |= XD3_SEC_LZMA;
+	}
+      else if (strcmp (option_secondary, "fgk") == 0 && SECONDARY_FGK)
+	{
+	  config->flags |= XD3_SEC_FGK;
+	}
+      else if (strncmp (option_secondary, "djw", 3) == 0 && SECONDARY_DJW)
+	{
+	  usize_t level = XD3_DEFAULT_SECONDARY_LEVEL;
 
-	      config->flags |= XD3_SEC_DJW;
+	  config->flags |= XD3_SEC_DJW;
 
-	      if (strlen (option_secondary) > 3 &&
-		  (ret = main_atou (option_secondary + 3,
-				    &level,
-				    0, 9, 'S')) != 0 &&
-		  !option_quiet)
-		{
-		  return XD3_INVALID;
-		}
-
-	      /* XD3_SEC_NOXXXX flags disable secondary compression on
-	       * a per-section basis.  For djw, ngroups=1 indicates
-	       * minimum work, ngroups=0 uses default settings, which
-	       * is > 1 groups by default. */
-	      if (level < 1) { config->flags |= XD3_SEC_NODATA; }
-	      if (level < 7) { config->sec_data.ngroups = 1; }
-	      else { config->sec_data.ngroups = 0; }
-
-	      if (level < 3) { config->flags |= XD3_SEC_NOINST; }
-	      if (level < 8) { config->sec_inst.ngroups = 1; }
-	      else { config->sec_inst.ngroups = 0; }
-
-	      if (level < 5) { config->flags |= XD3_SEC_NOADDR; }
-	      if (level < 9) { config->sec_addr.ngroups = 1; }
-	      else { config->sec_addr.ngroups = 0; }
-	    }
-	  else if (strcmp (option_secondary, "none") == 0 && SECONDARY_DJW)
+	  if (strlen (option_secondary) > 3 &&
+	      (ret = main_atou (option_secondary + 3,
+				&level,
+				0, 9, 'S')) != 0 &&
+	      !option_quiet)
 	    {
-	      /* No secondary */
+	      return XD3_INVALID;
 	    }
-	  else
+
+	  /* XD3_SEC_NOXXXX flags disable secondary compression on
+	   * a per-section basis.  For djw, ngroups=1 indicates
+	   * minimum work, ngroups=0 uses default settings, which
+	   * is > 1 groups by default. */
+	  if (level < 1) { config->flags |= XD3_SEC_NODATA; }
+	  if (level < 7) { config->sec_data.ngroups = 1; }
+	  else { config->sec_data.ngroups = 0; }
+
+	  if (level < 3) { config->flags |= XD3_SEC_NOINST; }
+	  if (level < 8) { config->sec_inst.ngroups = 1; }
+	  else { config->sec_inst.ngroups = 0; }
+
+	  if (level < 5) { config->flags |= XD3_SEC_NOADDR; }
+	  if (level < 9) { config->sec_addr.ngroups = 1; }
+	  else { config->sec_addr.ngroups = 0; }
+	}
+      else if (*option_secondary == 0 ||
+	       strcmp (option_secondary, "none") == 0)
+	{
+	}
+      else 
+	{
+	  if (!option_quiet)
 	    {
-	      if (!option_quiet)
-		{
-		  XPR(NT "unrecognized secondary compressor type: %s\n",
-		      option_secondary);
-		  return XD3_INVALID;
-		}
+	      XPR(NT "unrecognized or not compiled secondary compressor: %s\n",
+		  option_secondary);
 	    }
+	  return XD3_INVALID;
 	}
     }
 
@@ -1250,8 +1238,9 @@ main_set_secondary_flags (xd3_config *config)
  VCDIFF TOOLS
  *****************************************************************/
 
-#if VCDIFF_TOOLS
 #include "xdelta3-merge.h"
+
+#if VCDIFF_TOOLS
 
 /* The following macros let VCDIFF print using main_file_write(),
  * for example:
@@ -1934,7 +1923,7 @@ main_merge_output (xd3_stream *stream, main_file *ofile)
 	     inst_pos < stream->whole_target.instlen)
 	{
 	  xd3_winst *inst = &stream->whole_target.inst[inst_pos];
-	  usize_t take = min(inst->size, window_size - window_pos);
+	  usize_t take = xd3_min(inst->size, window_size - window_pos);
 	  xoff_t addr;
 
 	  switch (inst->type)
@@ -1957,8 +1946,8 @@ main_merge_output (xd3_stream *stream, main_file *ofile)
 	      if (inst->mode != 0)
 		{
 		  if (window_srcset) {
-		    window_srcmin = min(window_srcmin, inst->addr);
-		    window_srcmax = max(window_srcmax, inst->addr + take);
+		    window_srcmin = xd3_min (window_srcmin, inst->addr);
+		    window_srcmax = xd3_max (window_srcmax, inst->addr + take);
 		  } else {
 		    window_srcset = 1;
 		    window_srcmin = inst->addr;
@@ -2418,9 +2407,9 @@ main_secondary_decompress_check (main_file  *file,
 {
   int ret;
   usize_t i;
-  usize_t try_read = min (input_size, XD3_ALLOCSIZE);
+  usize_t try_read = xd3_min (input_size, XD3_ALLOCSIZE);
   size_t  check_nread = 0;
-  uint8_t check_buf[XD3_ALLOCSIZE];  /* TODO: stack limit */
+  uint8_t check_buf[XD3_ALLOCSIZE];  /* TODO: heap allocate */
   const main_extcomp *decompressor = NULL;
 
   if ((ret = main_file_read (file, check_buf,
@@ -2813,11 +2802,12 @@ main_get_appheader (xd3_stream *stream, main_file *ifile,
       char *start = (char*)apphead;
       char *slash;
       int   place = 0;
+      const int kMaxArgs = 4;
       char *parsed[4];
 
       memset (parsed, 0, sizeof (parsed));
 
-      while ((slash = strchr (start, '/')) != NULL)
+      while ((slash = strchr (start, '/')) != NULL && place < (kMaxArgs-1))
 	{
 	  *slash = 0;
 	  parsed[place++] = start;
@@ -2942,10 +2932,10 @@ main_get_winsize (main_file *ifile) {
 
   if (main_file_stat (ifile, &file_size) == 0)
     {
-      size = (usize_t) min(file_size, (xoff_t) size);
+      size = (usize_t) xd3_min (file_size, (xoff_t) size);
     }
 
-  size = max(size, XD3_ALLOCSIZE);
+  size = xd3_max (size, XD3_ALLOCSIZE);
 
   if (option_verbose > 1)
     {
@@ -3040,7 +3030,6 @@ main_input (xd3_cmd     cmd,
       output_func = main_write_output;
 
       if (option_no_compress)      { stream_flags |= XD3_NOCOMPRESS; }
-      if (option_use_altcodetable) { stream_flags |= XD3_ALT_CODE_TABLE; }
       if (option_smatch_config)
 	{
 	  const char *s = option_smatch_config;
@@ -3177,7 +3166,7 @@ main_input (xd3_cmd     cmd,
 
       input_remain = XOFF_T_MAX - input_offset;
 
-      try_read = (usize_t) min ((xoff_t) config.winsize, input_remain);
+      try_read = (usize_t) xd3_min ((xoff_t) config.winsize, input_remain);
 
       if ((ret = main_read_primary_input (ifile, main_bdata,
 					  try_read, & nread)))
@@ -3335,7 +3324,7 @@ main_input (xd3_cmd     cmd,
 			    main_format_bcnt (stream.total_in, &trdb),
 			    main_format_bcnt (stream.total_out, &twdb),
 			    main_format_millis (millis, &tm),
-			    main_format_bcnt (sfile->source_position, &srcpos));
+			    main_format_bcnt (stream.srcwin_cksum_pos, &srcpos));
 		      }
 		    else
 		      {
@@ -3356,7 +3345,8 @@ main_input (xd3_cmd     cmd,
 	default:
 	  /* input_func() error */
 	  XPR(NT XD3_LIB_ERRMSG (& stream, ret));
-	  if (! option_quiet && ret == XD3_INVALID_INPUT)
+	  if (! option_quiet && ret == XD3_INVALID_INPUT &&
+	      sfile != NULL && sfile->filename != NULL)
 	    {
 	      XPR(NT "normally this indicates that the source file is incorrect\n");
 	      XPR(NT "please verify the source file with sha1sum or equivalent\n");
@@ -3557,7 +3547,7 @@ int main (int argc, char **argv)
 #endif
 {
   static const char *flags =
-    "0123456789cdefhnqvDFJNORTVs:m:B:C:E:I:L:O:M:P:W:A::S::";
+    "0123456789cdefhnqvDFJNORVs:m:B:C:E:I:L:O:M:P:W:A::S::";
   xd3_cmd cmd;
   main_file ifile;
   main_file ofile;
@@ -3757,13 +3747,12 @@ int main (int argc, char **argv)
 
 	case 'n': option_use_checksum = 0; break;
 	case 'N': option_no_compress = 1; break;
-	case 'T': option_use_altcodetable = 1; break;
 	case 'C': option_smatch_config = my_optarg; break;
 	case 'J': option_no_output = 1; break;
 	case 'S': if (my_optarg == NULL)
 	    {
-	      option_use_secondary = 1;
-	      option_secondary = "none";
+	      option_use_secondary = 0;
+	      option_secondary = NULL;
 	    }
 	  else
 	    {
@@ -4029,7 +4018,7 @@ main_help (void)
 
   XPR(NTR "compression options:\n");
   XPR(NTR "   -s source    source file to copy from (if any)\n");
-  XPR(NTR "   -S [djw|fgk] enable/disable secondary compression\n");
+  XPR(NTR "   -S [lzma|djw|fgk] enable/disable secondary compression\n");
   XPR(NTR "   -N           disable small string-matching compression\n");
   XPR(NTR "   -D           disable external decompression (encode/decode)\n");
   XPR(NTR "   -R           disable external recompression (decode)\n");
@@ -4037,7 +4026,6 @@ main_help (void)
   XPR(NTR "   -C           soft config (encode, undocumented)\n");
   XPR(NTR "   -A [apphead] disable/provide application header (encode)\n");
   XPR(NTR "   -J           disable output (check/compute only)\n");
-  XPR(NTR "   -T           use alternate code table (test)\n");
   XPR(NTR "   -m           arguments for \"merge\"\n");
 
   XPR(NTR "the XDELTA environment variable may contain extra args:\n");

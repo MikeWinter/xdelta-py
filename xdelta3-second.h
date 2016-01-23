@@ -140,6 +140,12 @@ xd3_decode_secondary (xd3_stream      *stream,
       return ret;
     }
 
+  if (dec_size == 0)
+    {
+      stream->msg = "secondary decoder invalid output size";
+      return XD3_INVALID_INPUT;
+    }
+
   out_used = sect->copied2;
 
   if ((ret = stream->sec_type->decode (stream, *sec_streamp,
@@ -292,9 +298,12 @@ xd3_encode_secondary (xd3_stream      *stream,
 
   if (comp_size < (orig_size - SECONDARY_MIN_SAVINGS) || cfg->inefficient)
     {
-      IF_DEBUG1(DP(RINT "secondary saved %u bytes: %u -> %u (%0.2f%%)\n",
-		   orig_size - comp_size, orig_size, comp_size,
-	       100.0 * (double) comp_size / (double) orig_size));
+      if (comp_size < orig_size)
+	{
+	  IF_DEBUG1(DP(RINT "[encode_secondary] saved %u bytes: %u -> %u (%0.2f%%)\n",
+		       orig_size - comp_size, orig_size, comp_size,
+		       100.0 * (double) comp_size / (double) orig_size));
+	}
 
       xd3_free_output (stream, *head);
 

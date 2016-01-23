@@ -1,7 +1,7 @@
 from setuptools import Extension, setup
 
 setup(name='DjangoDelta',
-      version='1.0',
+      version='1.0.1',
       description='XDelta3 Delta Encoding Tools for Django',
       author='Michael Winter',
       author_email='mail@michael-winter.me.uk',

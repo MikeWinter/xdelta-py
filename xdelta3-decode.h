@@ -1,5 +1,6 @@
 /* xdelta 3 - delta compression tools and library
- * Copyright (C) 2002, 2003, 2004, 2005, 2006, 2007.  Joshua P. MacDonald
+ * Copyright (C) 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
+ * 2011, 2012, 2013, 2014, 2015.  Joshua P. MacDonald
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -24,6 +25,50 @@
 #define SRCORTGT(x) ((((x) & VCD_SRCORTGT) == VCD_SOURCE) ? \
                      VCD_SOURCE : ((((x) & VCD_SRCORTGT) == \
                                     VCD_TARGET) ? VCD_TARGET : 0))
+
+static inline int
+xd3_decode_byte (xd3_stream *stream, usize_t *val)
+{
+  if (stream->avail_in == 0)
+    {
+      stream->msg = "further input required";
+      return XD3_INPUT;
+    }
+
+  (*val) = stream->next_in[0];
+
+  DECODE_INPUT (1);
+  return 0;
+}
+
+static inline int
+xd3_decode_bytes (xd3_stream *stream, uint8_t *buf, usize_t *pos, usize_t size)
+{
+  usize_t want;
+  usize_t take;
+
+  /* Note: The case where (*pos == size) happens when a zero-length
+   * appheader or code table is transmitted, but there is nothing in
+   * the standard against that. */
+  while (*pos < size)
+    {
+      if (stream->avail_in == 0)
+	{
+	  stream->msg = "further input required";
+	  return XD3_INPUT;
+	}
+
+      want = size - *pos;
+      take = xd3_min (want, stream->avail_in);
+
+      memcpy (buf + *pos, stream->next_in, (size_t) take);
+
+      DECODE_INPUT (take);
+      (*pos) += take;
+    }
+
+  return 0;
+}
 
 /* Initialize the decoder for a new window.  The dec_tgtlen value is
  * preserved across successive window decodings, and the update to
@@ -52,6 +97,15 @@ xd3_decode_setup_buffers (xd3_stream *stream)
   /* If VCD_TARGET is set then the previous buffer may be reused. */
   if (stream->dec_win_ind & VCD_TARGET)
     {
+      /* Note: this implementation is untested, since Xdelta3 itself
+       * does not implement an encoder for VCD_TARGET mode. Thus, mark
+       * unimplemented until needed. */
+      if (1)
+	{
+	  stream->msg = "VCD_TARGET not implemented";
+	  return XD3_UNIMPLEMENTED;
+	}
+
       /* But this implementation only supports copying from the last
        * target window.  If the offset is outside that range, it can't
        * be done. */
@@ -71,7 +125,7 @@ xd3_decode_setup_buffers (xd3_stream *stream)
 	  stream->space_out = 0;
 	}
 
-      // TODO: VCD_TARGET mode, this is broken
+      /* TODO: (See note above, this looks incorrect) */
       stream->dec_cpyaddrbase = stream->dec_lastwin +
 	(usize_t) (stream->dec_cpyoff - stream->dec_laststart);
     }
@@ -108,6 +162,9 @@ xd3_decode_allocate (xd3_stream  *stream,
 		     uint8_t    **buf_ptr,
 		     usize_t      *buf_alloc)
 {
+  IF_DEBUG2 (DP(RINT "[xd3_decode_allocate] size %u alloc %u\n",
+		size, *buf_alloc));
+  
   if (*buf_ptr != NULL && *buf_alloc < size)
     {
       xd3_free (stream, *buf_ptr);
@@ -150,13 +207,15 @@ xd3_decode_section (xd3_stream *stream,
 	  /* No allocation/copy needed */
 	  section->buf = stream->next_in;
 	  sect_take    = section->size;
+	  IF_DEBUG1 (DP(RINT "[xd3_decode_section] zerocopy %u @ %u avail %u\n",
+			sect_take, section->pos, stream->avail_in));
 	}
       else
 	{
 	  usize_t sect_need = section->size - section->pos;
 
 	  /* Allocate and copy */
-	  sect_take = min (sect_need, stream->avail_in);
+	  sect_take = xd3_min (sect_need, stream->avail_in);
 
 	  if (section->pos == 0)
 	    {
@@ -173,6 +232,10 @@ xd3_decode_section (xd3_stream *stream,
 	      section->buf = section->copied1;
 	    }
 
+	  IF_DEBUG2 (DP(RINT "[xd3_decode_section] take %u @ %u [need %u] avail %u\n",
+			sect_take, section->pos, sect_need, stream->avail_in));
+	  XD3_ASSERT (section->pos + sect_take <= section->alloc1);
+
 	  memcpy (section->copied1 + section->pos,
 		  stream->next_in,
 		  sect_take);
@@ -187,6 +250,7 @@ xd3_decode_section (xd3_stream *stream,
 
   if (section->pos < section->size)
     {
+      IF_DEBUG1 (DP(RINT "[xd3_decode_section] further input required %u\n", section->size - section->pos));
       stream->msg = "further input required";
       return XD3_INPUT;
     }
@@ -343,6 +407,13 @@ xd3_decode_output_halfinst (xd3_stream *stream, xd3_hinst *inst)
    * supplies the data */
   usize_t take = inst->size;
 
+  if (USIZE_T_OVERFLOW (stream->avail_out, take) ||
+      stream->avail_out + take > stream->space_out)
+    {
+      stream->msg = "overflow while decoding";
+      return XD3_INVALID_INPUT;
+    }
+
   XD3_ASSERT (inst->type != XD3_NOOP);
 
   switch (inst->type)
@@ -414,7 +485,8 @@ xd3_decode_output_halfinst (xd3_stream *stream, xd3_hinst *inst)
 	      {
 		/* TODO: Users have requested long-distance copies of
 		 * similar material within a target (e.g., for dup
-		 * supression in backups). */
+		 * supression in backups). This code path is probably
+		 * dead due to XD3_UNIMPLEMENTED in xd3_decode_setup_buffers */
 		inst->size = 0;
 		inst->type = XD3_NOOP;
 		stream->msg = "VCD_TARGET not implemented";
@@ -570,10 +642,23 @@ xd3_decode_sections (xd3_stream *stream)
       return xd3_decode_finish_window (stream);
     }
 
-  /* To avoid copying, need this much data available */
-  need = (stream->inst_sect.size +
-	  stream->addr_sect.size +
-	  stream->data_sect.size);
+  /* To avoid extra copying, allocate three sections at once (but
+   * check for overflow). */
+  need = stream->inst_sect.size;
+
+  if (USIZE_T_OVERFLOW (need, stream->addr_sect.size))
+    {
+      stream->msg = "decoder section size overflow";
+      return XD3_INTERNAL;
+    }
+  need += stream->addr_sect.size;
+
+  if (USIZE_T_OVERFLOW (need, stream->data_sect.size))
+    {
+      stream->msg = "decoder section size overflow";
+      return XD3_INTERNAL;
+    }
+  need += stream->data_sect.size;
 
   /* The window may be entirely processed. */
   XD3_ASSERT (stream->dec_winbytes <= need);
@@ -582,7 +667,7 @@ xd3_decode_sections (xd3_stream *stream)
   more = (need - stream->dec_winbytes);
 
   /* How much to consume. */
-  take = min (more, stream->avail_in);
+  take = xd3_min (more, stream->avail_in);
 
   /* See if the input is completely available, to avoid copy. */
   copy = (take != more);
@@ -841,27 +926,8 @@ xd3_decode_input (xd3_stream *stream)
 
       if ((stream->dec_hdr_ind & VCD_CODETABLE) != 0)
 	{
-	  /* Get the code table data. */
-	  if ((stream->dec_codetbl == NULL) &&
-	      (stream->dec_codetbl =
-	       (uint8_t*) xd3_alloc (stream,
-				     stream->dec_codetblsz, 1)) == NULL)
-	    {
-	      return ENOMEM;
-	    }
-
-	  if ((ret = xd3_decode_bytes (stream, stream->dec_codetbl,
-				       & stream->dec_codetblbytes,
-				       stream->dec_codetblsz)))
-	    {
-	      return ret;
-	    }
-
-	  if ((ret = xd3_apply_table_encoding (stream, stream->dec_codetbl,
-					       stream->dec_codetblbytes)))
-	    {
-	      return ret;
-	    }
+	  stream->msg = "VCD_CODETABLE support was removed";
+	  return XD3_UNIMPLEMENTED;
 	}
       else
 	{
@@ -885,7 +951,13 @@ xd3_decode_input (xd3_stream *stream)
       if (stream->dec_hdr_ind & VCD_APPHEADER)
 	{
 	  /* Note: we add an additional byte for padding, to allow
-	     0-termination. */
+	     0-termination. Check for overflow: */
+	  if (USIZE_T_OVERFLOW(stream->dec_appheadsz, 1))
+	    {
+	      stream->msg = "exceptional appheader size";
+	      return XD3_INVALID_INPUT;
+	    }
+
 	  if ((stream->dec_appheader == NULL) &&
 	      (stream->dec_appheader =
 	       (uint8_t*) xd3_alloc (stream,
@@ -953,6 +1025,7 @@ xd3_decode_input (xd3_stream *stream)
 
     case DEC_CPYOFF:
       /* Copy window offset: only if VCD_SOURCE or VCD_TARGET is set */
+      
       OFFSET_CASE(SRCORTGT (stream->dec_win_ind), stream->dec_cpyoff,
 		  DEC_ENCLEN);
 
@@ -1092,8 +1165,8 @@ xd3_decode_input (xd3_stream *stream)
 			  &src->cpyoff_blocks,
 			  &src->cpyoff_blkoff);
 	  
-	  IF_DEBUG1(DP(RINT
-		       "decode cpyoff %"Q"u "
+	  IF_DEBUG2(DP(RINT
+		       "[decode_cpyoff] %"Q"u "
 		       "cpyblkno %"Q"u "
 		       "cpyblkoff %u "
 		       "blksize %u\n",

@@ -28,4 +28,7 @@
 #   define UNALIGNED_OK 0
 #endif
 
+// The size of `size_t', as computed by sizeof.
+#define SIZEOF_SIZE_T 8
+
 #endif	/* CONFIG_H */
